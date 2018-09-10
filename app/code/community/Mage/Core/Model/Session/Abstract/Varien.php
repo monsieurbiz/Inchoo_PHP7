@@ -83,7 +83,12 @@ class Mage_Core_Model_Session_Abstract_Varien extends Varien_Object
                 session_save_path($this->getSessionSavePath());
                 break;
         }
-        session_module_name($moduleName);
+
+        // PHP 7.2.x fix: Recoverable Error: session_module_name(): Cannot set
+        // 'user' save handler by ini_set() or session_module_name()
+        try {
+            session_module_name($moduleName);
+        } catch (\Throwable $e) {}
 
         $cookie = $this->getCookie();
         if (Mage::app()->getStore()->isAdmin()) {
