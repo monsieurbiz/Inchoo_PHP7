@@ -20,7 +20,7 @@
  *
  * @category    Mage
  * @package     Mage_Core
- * @copyright  Copyright (c) 2006-2018 Magento, Inc. (http://www.magento.com)
+ * @copyright  Copyright (c) 2006-2017 X.commerce, Inc. and affiliates (http://www.magento.com)
  * @license    http://opensource.org/licenses/osl-3.0.php  Open Software License (OSL 3.0)
  */
 
@@ -33,11 +33,7 @@ class Mage_Core_Model_Session_Abstract_Varien extends Varien_Object
     const VALIDATOR_HTTP_VIA_KEY                = 'http_via';
     const VALIDATOR_REMOTE_ADDR_KEY             = 'remote_addr';
     const VALIDATOR_SESSION_EXPIRE_TIMESTAMP    = 'session_expire_timestamp';
-    const VALIDATOR_PASSWORD_CREATE_TIMESTAMP   = 'password_create_timestamp';
     const SECURE_COOKIE_CHECK_KEY               = '_secure_cookie_check';
-
-    /** @var bool Flag true if session validator data has already been evaluated */
-    protected static $isValidated = FALSE;
 
     /**
      * Map of session enabled hosts
@@ -161,12 +157,12 @@ class Mage_Core_Model_Session_Abstract_Varien extends Varien_Object
                     /**
                      * Renew secure cookie expiration time if secure id did not change
                      */
-                    $cookie->renew($secureCookieName, null, null, null, true, true);
+                    $cookie->renew($secureCookieName, null, null, null, true, null);
                 }
             }
             if (!isset($_SESSION[self::SECURE_COOKIE_CHECK_KEY])) {
                 $checkId = Mage::helper('core')->getRandomString(16);
-                $cookie->set($secureCookieName, $checkId, null, null, null, true, true);
+                $cookie->set($secureCookieName, $checkId, null, null, null, true);
                 $_SESSION[self::SECURE_COOKIE_CHECK_KEY] = md5($checkId);
             }
         }
@@ -403,16 +399,6 @@ class Mage_Core_Model_Session_Abstract_Varien extends Varien_Object
     }
 
     /**
-     * Use password creation timestamp in validator key
-     *
-     * @return bool
-     */
-    public function useValidateSessionPasswordTimestamp()
-    {
-        return true;
-    }
-
-    /**
      * Retrieve skip User Agent validation strings (Flash etc)
      *
      * @return array
@@ -425,29 +411,19 @@ class Mage_Core_Model_Session_Abstract_Varien extends Varien_Object
     /**
      * Validate session
      *
-     * @throws Mage_Core_Model_Session_Exception
+     * @param string $namespace
      * @return Mage_Core_Model_Session_Abstract_Varien
      */
     public function validate()
     {
-        // Backwards compatibility with legacy sessions (validator data stored per-namespace)
-        if (isset($this->_data[self::VALIDATOR_KEY])) {
-            $_SESSION[self::VALIDATOR_KEY] = $this->_data[self::VALIDATOR_KEY];
-            unset($this->_data[self::VALIDATOR_KEY]);
-        }
-        if (!isset($_SESSION[self::VALIDATOR_KEY])) {
-            $_SESSION[self::VALIDATOR_KEY] = $this->getValidatorData();
+        if (!isset($this->_data[self::VALIDATOR_KEY])) {
+            $this->_data[self::VALIDATOR_KEY] = $this->getValidatorData();
         }
         else {
-            if ( ! self::$isValidated && ! $this->_validate()) {
+            if (!$this->_validate()) {
                 $this->getCookie()->delete(session_name());
                 // throw core session exception
                 throw new Mage_Core_Model_Session_Exception('');
-            }
-
-            // Refresh expire timestamp
-            if ($this->useValidateSessionExpire()) {
-                $_SESSION[self::VALIDATOR_KEY][self::VALIDATOR_SESSION_EXPIRE_TIMESTAMP] = time() + $this->getCookie()->getLifetime();
             }
         }
 
@@ -461,21 +437,22 @@ class Mage_Core_Model_Session_Abstract_Varien extends Varien_Object
      */
     protected function _validate()
     {
-        $sessionData = $_SESSION[self::VALIDATOR_KEY];
+        $sessionData = $this->_data[self::VALIDATOR_KEY];
         $validatorData = $this->getValidatorData();
-        self::$isValidated = TRUE; // Only validate once since the validator data is the same for every namespace
 
         if ($this->useValidateRemoteAddr()
-                && $sessionData[self::VALIDATOR_REMOTE_ADDR_KEY] != $validatorData[self::VALIDATOR_REMOTE_ADDR_KEY]) {
+            && $sessionData[self::VALIDATOR_REMOTE_ADDR_KEY] != $validatorData[self::VALIDATOR_REMOTE_ADDR_KEY]) {
             return false;
         }
         if ($this->useValidateHttpVia()
-                && $sessionData[self::VALIDATOR_HTTP_VIA_KEY] != $validatorData[self::VALIDATOR_HTTP_VIA_KEY]) {
+            && $sessionData[self::VALIDATOR_HTTP_VIA_KEY] != $validatorData[self::VALIDATOR_HTTP_VIA_KEY]) {
             return false;
         }
 
+        $sessionValidateHttpXForwardedForKey = $sessionData[self::VALIDATOR_HTTP_X_FORVARDED_FOR_KEY];
+        $validatorValidateHttpXForwardedForKey = $validatorData[self::VALIDATOR_HTTP_X_FORVARDED_FOR_KEY];
         if ($this->useValidateHttpXForwardedFor()
-                && $sessionData[self::VALIDATOR_HTTP_X_FORVARDED_FOR_KEY] != $validatorData[self::VALIDATOR_HTTP_X_FORVARDED_FOR_KEY]) {
+            && $sessionValidateHttpXForwardedForKey != $validatorValidateHttpXForwardedForKey ) {
             return false;
         }
         if ($this->useValidateHttpUserAgent()
@@ -494,14 +471,9 @@ class Mage_Core_Model_Session_Abstract_Varien extends Varien_Object
             && isset($sessionData[self::VALIDATOR_SESSION_EXPIRE_TIMESTAMP])
             && $sessionData[self::VALIDATOR_SESSION_EXPIRE_TIMESTAMP] < time() ) {
             return false;
-        }
-        if ($this->useValidateSessionPasswordTimestamp()
-            && isset($validatorData[self::VALIDATOR_PASSWORD_CREATE_TIMESTAMP])
-            && isset($sessionData[self::VALIDATOR_SESSION_EXPIRE_TIMESTAMP])
-            && $validatorData[self::VALIDATOR_PASSWORD_CREATE_TIMESTAMP]
-            > $sessionData[self::VALIDATOR_SESSION_EXPIRE_TIMESTAMP] - $this->getCookie()->getLifetime()
-        ) {
-            return false;
+        } else {
+            $this->_data[self::VALIDATOR_KEY][self::VALIDATOR_SESSION_EXPIRE_TIMESTAMP]
+                = $validatorData[self::VALIDATOR_SESSION_EXPIRE_TIMESTAMP];
         }
 
         return true;
@@ -538,11 +510,6 @@ class Mage_Core_Model_Session_Abstract_Varien extends Varien_Object
         }
 
         $parts[self::VALIDATOR_SESSION_EXPIRE_TIMESTAMP] = time() + $this->getCookie()->getLifetime();
-
-        if (isset($this->_data['visitor_data']['customer_id'])) {
-            $parts[self::VALIDATOR_PASSWORD_CREATE_TIMESTAMP] =
-                Mage::helper('customer')->getPasswordTimestamp($this->_data['visitor_data']['customer_id']);
-        }
 
         return $parts;
     }
